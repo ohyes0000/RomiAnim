@@ -8,23 +8,23 @@ import json as JSON
 
 project = {
     "known_attributes":[["x","y","z","xrot","yrot","zrot","xsc","ysc","zsc"],["spr","ind","col","a"]],
+    "separators":{"defobj":".", "obj":".", "ns":"/"},
     "textures":[],
     "sprite_names":[],
     "sprites":[],
     "nodes":[],
-    "objects":{"-1":[]}, #(if nodeindex #0 has multiple objects) -> 0.8, 0.9, 0.10, 0.11 
-    "object_nodes":{"-1":None},
+    "objects":{}, #(if nodeindex #0 has multiple objects) -> 0.8, 0.9, 0.10, 0.11 
     "animations":{}
 }
 misc = {
     "projectmode":"off",
     "nodestack":[],
-    "objectstack":["."],
+    "objectstack":[],
     "objectaddstack":"",
+    "nodeobjectcount":{},
     "unusednodes":[], # Nodes that don't draw and don't stack
     "animcurrent":-1,
 }
-
 
 
 ## MATRIX MULTIPLICATION matr1@matr2: Child @ Parent
@@ -112,6 +112,9 @@ class InitCreationRegion:
     def __enter__(self):
         __pvm__("off")
         misc["projectmode"] = "init"
+        sep = project["separators"]["defobj"]
+        project["objects"][sep] = []
+        misc["objectstack"].append(sep)
 
     def __exit__(self,exc_type,exc_val,exc_tb):
         misc["projectmode"] = "init(done)"
@@ -144,7 +147,7 @@ def sprite_get_from_gamemaker(yyfile:str):
 
     name = data["name"]
     if project["sprite_names"].__contains__(name):
-        ProjectError(f"\"{name}\" : Sprite Already Exists")
+        ProjectError(f"(Sprites) : \"{name}\" Sprite already exists")
     project["sprite_names"].append(name)
     project["sprites"].append(sprtexs)
 
@@ -158,33 +161,50 @@ def sprite_get_from_gamemaker(yyfile:str):
 
 ##########################################################
 
-# Not used in a node
-
 class _NodeIndex(int):
     pass
 
 ## nodestack array is backwards (when it comes to matrix mult order) -> [..., grandparent, parent, child]
 ## because of nodestack - a child of a node will always have an index greater than the parent - ()
 class NodeStack(_NodeIndex):
-    def __enter__(self):
+    def __stackin__(self):
         __pvm__("init")
         nodeindex = _NodeIndex(self.__int__())
-        if misc["nodestack"].__contains__(nodeindex):
-            raise ProjectError(f"(NodeStacks) \"Node #{nodeindex}\" : This Node already appears in a NodeStack")
+        if len(misc["nodestack"]) > 0:
+            if not misc["nodestack"][-1] < nodeindex:
+                raise ProjectError(f"(NodeStacks) : Node(#{nodeindex}) of Erred NodeStack must be created AFTER Node(#{misc["nodestack"][-1]}) of Current NodeStack")
         misc["nodestack"].append(nodeindex)
-        if misc["objectaddstack"] != "":
-            misc["objectstack"].append(misc["objectaddstack"])
         if misc["unusednodes"].__contains__(nodeindex):
             misc["unusednodes"].remove(nodeindex)
         return nodeindex
     
-    def __exit__(self,exc_type,exc_val,exc_tb):
+    def __stackout__(self):
+        __pvm__("init")
         misc["nodestack"].pop()
-        if project["object_nodes"][misc["objectstack"][-1]] == self.__int__():
-            misc["objectstack"].pop()
+
+    def __enter__(self):
+        return self.__stackin__()
+    
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        self.__stackout__()
 
 
-def node_create(draw=False,object=False,objectname:str=None,**attrs):
+class NodeStackObject(NodeStack):
+    def __enter__(self):
+        nodeindex = self.__stackin__()
+        count = misc["nodeobjectcount"].setdefault(nodeindex,0)
+        objname = f"{nodeindex}{project["separators"]["obj"]}{count}" if count>0 else f"{nodeindex}"
+        misc["nodeobjectcount"][nodeindex]+=1
+        project["objects"][objname] = []
+        misc["objectstack"].append(objname)
+        return nodeindex
+
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        self.__stackout__()
+        misc["objectstack"].pop()
+
+
+def node_create(draw=False,**attrs):
     __pvm__("init")
     
     node = {}
@@ -198,37 +218,40 @@ def node_create(draw=False,object=False,objectname:str=None,**attrs):
             mch = True
         elif project["known_attributes"][1].__contains__(attr):
             node[attr] = val
-    if draw: 
-        node["ns"] = misc["nodestack"].copy()
     if mch:
         node["matb"] = tuple(matb)
     project["nodes"].append(node)
     nodeindex = _NodeIndex(len(project["nodes"])-1)
-
-    if not draw: misc["unusednodes"].append(nodeindex)
-    if object:
-        #if objectname:
-        name = "."+objectname
-        if project["objects"].__contains__(object): 
-            raise ProjectError(f"(Objects) : Object \"{object}\" already exists")
-        project["objects"][object] = [nodeindex] if draw else []
-        project["object_nodes"][object] = nodeindex
-    elif draw:
-        project["objects"][misc["objectstack"][-1]].append(nodeindex) 
-    misc["objectaddstack"] = object
+    misc["unusednodes"].append(nodeindex)
     
     return nodeindex
 
-def nodes_create_with_sprite_basic(spritename:str,origin:tuple,object:str=""):
+def node_object_draw(nodeindex:_NodeIndex):
+    __pvm__("init")
+    obj = project["objects"][misc["objectstack"][-1]]
+    if obj.__contains__(nodeindex):
+        raise ProjectError(f"(Objects) : Node(#{nodeindex}) already has been drawn in this Object")
+    obj.append(nodeindex)
+    if misc["unusednodes"].__contains__(nodeindex):
+        misc["unusednodes"].remove(nodeindex)
+    node = project["nodes"][nodeindex]
+    if len(misc["nodestack"]) > 0:
+        sep = project["separators"]["ns"]
+        node.setdefault("ns",[]).append("".join(str(ni)+sep for ni in misc["nodestack"]).strip(sep))
+
+    return nodeindex
+
+def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
     __pvm__("init")
     
-    with NodeStack(node_create(object=object)) as pos:
+    with NodeStackObject(node_create()) as pos:
         with NodeStack(node_create(x=-origin[0],y=-origin[1])) as org:
             sprinds = project["sprites"][project["sprite_names"].index(spritename)]
             inds = []
             for i in sprinds:
-                inds.append(node_create(draw=True,spr=spritename,ind=i))
-            node_create(spr=spritename,ind=i)
+                inds.append(node_object_draw(node_create(spr=spritename,ind=i)))
+        
+        node_object_draw(node_create())
     return {
         "main":pos,
         "origin":org,
@@ -257,7 +280,6 @@ def nodes_create_with_sprite_basic(spritename:str,origin:tuple,object:str=""):
 # Assign Animation to an object instance by:
     # Assign Animation Key Indices to Object Node Indices 
     # multiple Object Node Inds can use one Anim Key Index
-
 
 
 
@@ -339,16 +361,19 @@ def done(mrasbasename:str=""):
 
 
 ###################################################
+# C:/Users/mikey/Documents/GameMakerStudio2/RomitronAnimation/sprites/Sprite6/Sprite6.yy
+#
+with InitCreationRegion():
+    sprite_get_from_gamemaker("sTextBox.yy")
+    a = nodes_create_with_sprite_basic("sTextBox",(32,32))
+    print(f"Unused Nodes (list of NodeIndices): {misc['unusednodes']}")
+print(project)
 
 
 '''
-with InitCreationRegion():
-    sprite_get_from_gamemaker("C:/Users/mikey/Documents/GameMakerStudio2/RomitronAnimation/sprites/Sprite6/Sprite6.yy")
-    a = nodes_create_with_sprite_basic("Sprite6",(32,32),"Obj1")
 
 
-    print(f"Unused Nodes (list of NodeIndices): {misc['unusednodes']}")
-print(project)
+
 
 with AnimationCreationRegion():
     anim_create(True)
