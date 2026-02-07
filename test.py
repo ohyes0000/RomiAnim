@@ -8,13 +8,16 @@ import json as JSON
 
 project = {
     "known_attributes":[["x","y","z","xrot","yrot","zrot","xsc","ysc","zsc"],["spr","ind","col","a"]],
-    "separators":{"defobj":".", "obj":".", "ns":"/"},
+    "d_v_e_f":["delta","val","easing","func"], # although the "delta" key is "time", it must stay as "delta" as the argument of the "key_add" function
+    "separators":{"defobj":"#", "obj":":", "ns":"/"},
+    "key_components_order":["delta","val","func","func"],
     "textures":[],
     "sprite_names":[],
     "sprites":[],
     "nodes":[],
     "objects":{}, #(if nodeindex #0 has multiple objects) -> 0.8, 0.9, 0.10, 0.11 
-    "animations":{}
+    "animations":[],
+    
 }
 misc = {
     "projectmode":"off",
@@ -97,10 +100,10 @@ def matrix_4x4(mat):
 class ProjectError(Exception):
     pass
 
-def __pvm__(mode):
+def __pvm__(*mode):
     '''project_valid_mode'''
-    if misc["projectmode"] != mode:
-        raise ProjectError(f"(Currently in ProjectMode \"{misc['projectmode']}\") This Function must be executed in ProjectMode \"{mode}\"")
+    if not mode.__contains__(misc["projectmode"]):
+        raise ProjectError(f"(Currently in ProjectMode \"{misc['projectmode']}\") This Function must be executed in ProjectMode {list(mode)}")
     
 def __pka__(attr):
     '''project_known_attribute'''
@@ -111,6 +114,9 @@ def __pka__(attr):
 class InitCreationRegion:
     def __enter__(self):
         __pvm__("off")
+        for c in project["d_v_e_f"]:
+            if not project["key_components_order"].__contains__(c):
+                raise ProjectError(f"(Internal) : There is no \"{c}\" Key Component") 
         misc["projectmode"] = "init"
         sep = project["separators"]["defobj"]
         project["objects"][sep] = []
@@ -127,7 +133,14 @@ class AnimationCreationRegion:
     def __exit__(self,exc_type,exc_val,exc_tb):
         misc["projectmode"] = "anim(done)"
 
-    
+class SampleCreationRegion:
+    def __enter__(self):
+        __pvm__("anim(done)")
+        misc["projectmode"] = "smpl"
+
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        misc["projectmode"] = "smpl(done)"  
+
 ####################################################
 
 def sprite_get_from_gamemaker(yyfile:str):
@@ -167,44 +180,66 @@ class _NodeIndex(int):
 ## nodestack array is backwards (when it comes to matrix mult order) -> [..., grandparent, parent, child]
 ## because of nodestack - a child of a node will always have an index greater than the parent - ()
 class NodeStack(_NodeIndex):
+    def __init__(self,nodeindex:_NodeIndex):
+        pass
+
     def __stackin__(self):
         __pvm__("init")
-        nodeindex = _NodeIndex(self.__int__())
         if len(misc["nodestack"]) > 0:
-            if not misc["nodestack"][-1] < nodeindex:
-                raise ProjectError(f"(NodeStacks) : Node(#{nodeindex}) of Erred NodeStack must be created AFTER Node(#{misc["nodestack"][-1]}) of Current NodeStack")
-        misc["nodestack"].append(nodeindex)
-        if misc["unusednodes"].__contains__(nodeindex):
-            misc["unusednodes"].remove(nodeindex)
-        return nodeindex
+            if not misc["nodestack"][-1] < self:
+                raise ProjectError(f"(NodeStacks) : Node(#{self}) of Erred NodeStack must be created AFTER Node(#{misc["nodestack"][-1]}) of Current NodeStack")
+        misc["nodestack"].append(self)
+        if misc["unusednodes"].__contains__(self):
+            misc["unusednodes"].remove(self)
     
     def __stackout__(self):
         __pvm__("init")
         misc["nodestack"].pop()
 
     def __enter__(self):
-        return self.__stackin__()
+        self.__stackin__()
+        return self
     
     def __exit__(self,exc_type,exc_val,exc_tb):
         self.__stackout__()
 
 
 class NodeStackObject(NodeStack):
+    def __init__(self,nodeindex:_NodeIndex):
+        count = misc["nodeobjectcount"].setdefault(self,0)
+        self.__objname__ = project["separators"]["defobj"]+(f"{self}{project["separators"]["obj"]}{count}" if count>0 else f"{self}")
+        misc["nodeobjectcount"][self]+=1
+        project["objects"][self.__objname__] = []
+
     def __enter__(self):
-        nodeindex = self.__stackin__()
-        count = misc["nodeobjectcount"].setdefault(nodeindex,0)
-        objname = f"{nodeindex}{project["separators"]["obj"]}{count}" if count>0 else f"{nodeindex}"
-        misc["nodeobjectcount"][nodeindex]+=1
-        project["objects"][objname] = []
-        misc["objectstack"].append(objname)
-        return nodeindex
+        self.__stackin__()
+        misc["objectstack"].append(self.__objname__)
+        return self
 
     def __exit__(self,exc_type,exc_val,exc_tb):
         self.__stackout__()
         misc["objectstack"].pop()
 
+    def change_name(self,name:str):
+        __pvm__("init")
+        orgname = self.__objname__
+        if orgname != name:
+            if name == "":
+                raise ProjectError("(Objects) : Object name cannot be blank")
+            if name.startswith(project["separators"]["defobj"]):
+                raise ProjectError(f"(Objects) : Object name cannot start with \"{project['separators']['defobj']}\"")
+            if project["objects"].__contains__(name):
+                raise ProjectError(f"(Objects) : Object name \"{name}\" already taken")
+            project["objects"][name] = project["objects"].pop(self.__objname__)
+            if misc["objectstack"].__contains__(orgname):
+                ind = misc["objectstack"].index(orgname)
+                misc["objectstack"].pop(ind)
+                misc["objectstack"].insert(ind,name)
+            self.__objname__ = name
+        return self
 
-def node_create(draw=False,**attrs):
+
+def node_create(**attrs):
     __pvm__("init")
     
     node = {}
@@ -243,15 +278,14 @@ def node_object_draw(nodeindex:_NodeIndex):
 
 def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
     __pvm__("init")
-    
+
     with NodeStackObject(node_create()) as pos:
         with NodeStack(node_create(x=-origin[0],y=-origin[1])) as org:
             sprinds = project["sprites"][project["sprite_names"].index(spritename)]
             inds = []
             for i in sprinds:
                 inds.append(node_object_draw(node_create(spr=spritename,ind=i)))
-        
-        node_object_draw(node_create())
+                     
     return {
         "main":pos,
         "origin":org,
@@ -281,76 +315,95 @@ def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
     # Assign Animation Key Indices to Object Node Indices 
     # multiple Object Node Inds can use one Anim Key Index
 
-
-
+# NO ANIMATION KEY INDICES - JUST ANIMATION INDICES
+# AN ANIMATION CONTROLS ONLY ONE NODE ()
+# Value (Null or Undefined) = Initial Node Value
 class _AnimationIndex(int):
-    pass
+    def __addkey__(self,init,attr:str,**comps):
+        __pvm__("anim","anim(write)")
+        # no __pka__
+        key = []
+        order = project["key_components_order"]
+        indextime = order.index(project["d_v_e_f"][0])
+        for c in order:
+            if not comps.__contains__(c):
+                raise ProjectError(f"(Animation) : Key doesn't contain \"{c}\" component")
+            key.append(comps[c])
+        timeset = max(key[indextime],0)
+        trk = project["animations"][self]["attrs"].setdefault(attr,[])
+
+        if len(trk) > 0:
+            addedtime = trk[-1][indextime]
+            timeset += addedtime
+            if timeset == addedtime: trk.pop()
+        elif not init:
+            raise ProjectError(f"(Animation) : Attribute \"{attr}\" was not initiated in this Animation")
+         
+        key[indextime] = timeset
+        trk.append(tuple(key))
+        return trk[-1]
+        
 
 class AnimationWrite(_AnimationIndex):
+    def __init__(self,animationindex:_AnimationIndex):
+        pass
+
     def __enter__(self):
         __pvm__("anim")
-        animindex = _AnimationIndex(self.__int__())
-        misc["animcurrent"] = animindex
+        misc["animcurrent"] = self
         misc["projectmode"] = "anim(write)"
-        return animindex
+        return self
 
     def __exit__(self,exc_type,exc_val,exc_tb):
         __pvm__("anim(write)")
         misc["animcurrent"] = -1
         misc["projectmode"] = "anim"
 
-def animation_create():
+
+## KEYS REPLACE INIT VALUES
+## can make independent animations that take attr mul
+# keys time must start at zero
+def animation_create(**initattrs):
     __pvm__("anim")
-    project["animations"].append({"tracks":[],"len":0})
-    ind = _AnimationIndex(len(project["animations"])-1)
-    return ind
+    anim = {"attrs":{}}
+    project["animations"].append(anim)
+    animindex = _AnimationIndex(len(project["animations"])-1)
+
+    for attr,val in initattrs.items():
+        if attr[0] != "_": __pka__(attr)
+        animindex.__addkey__(True,attr,val=val,delta=0,easing=1,func=0)
+
+    return animindex
 
 
+def animation_key_add(attr,**comps):
+    __pvm__("anim(write)")
+    anim = misc["animcurrent"]
+    if not isinstance(anim,_AnimationIndex):
+        raise ProjectError("(Animation) : There is no active Animation to write in")
+    if not project["animations"][anim]["attrs"].__contains__(attr):
+        raise ProjectError(f"(Animation) : Must intialize Attribute \"{attr}\"")
 
-class _TrackIndex(int):
-    pass
+    order = project["d_v_e_f"]
+    comps.setdefault(order[0],0)
+    comps.setdefault(order[1],None)
+    comps.setdefault(order[2],1)
+    comps.setdefault(order[3],0)
+    return anim.__addkey__(
+        False,attr,**comps
+    )[project["key_components_order"].index(project["d_v_e_f"][0])]
 
-class TrackWrite(_TrackIndex):
-    def __enter__(self):
-        __pvm__("anim(write)")
-        trackindex = _TrackIndex(self.__int__())
-        misc["trackcurrent"] = trackindex
-        misc["projectmode"] = "anim(track)"
-
-    def __exit__(self,exc_type,exc_val,exc_tb):
-        __pvm__("anim(track)")
-        misc["trackcurrent"] = -1
-        misc["projectmode"] = "anim(write)"
-
-
-def animation_track_create(**attrs):
-    __pvm__("anim(track)")
-    for attr,val in attrs.items():
-        __pka__(attr)
-
-
-
-
-def animation_key_add(nodeindex:_NodeIndex,attr:str,val,delta:int,easing=1.0,func=0):
-    __pvm__("anim(active)")
-    __pka__(attr)
-    d = max(int(delta),0)
-    keys = project["animations"][-1][nodeindex][attr]
-    if d == 0: keys.pop()
-    keys.append([keys[-1][0]+d,val,easing,func])
-
-'''
-def anim_init_attr(nodeindex:_NodeIndex):
-    __pvm__("anim(active)")
-    anim = project["animations"][-1]
-    anim["draw"].extend(nodeindices)
-''' 
 
 ##########################
 # obj: list(inds from nodes_create_with_sprite_basic)
 # 
 
+#-----------------------------------------------------------
 
+def sample_create():
+    pass
+
+#-----------------------------------------------------------
 def done(mrasbasename:str=""):
     with open((mrasbasename if mrasbasename!="" else OS.path.splitext(__file__)[0])+".mras","w") as f: 
         f.write(JSON.encoder.JSONEncoder().encode(project))
@@ -367,7 +420,19 @@ with InitCreationRegion():
     sprite_get_from_gamemaker("sTextBox.yy")
     a = nodes_create_with_sprite_basic("sTextBox",(32,32))
     print(f"Unused Nodes (list of NodeIndices): {misc['unusednodes']}")
+
+
+with AnimationCreationRegion():
+    with AnimationWrite(animation_create(x=None,y=None,_a=2)) as b:
+        animation_key_add(attr="_a",delta=3)
+
+
+# Create a sample using one object
+with SampleCreationRegion():
+    pass
+
 print(project)
+
 
 
 '''
