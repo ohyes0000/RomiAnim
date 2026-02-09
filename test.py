@@ -8,14 +8,15 @@ import json as JSON
 
 project = {
     "known_attributes":[["x","y","z","xrot","yrot","zrot","xsc","ysc","zsc"],["spr","ind","col","a"]],
-    "d_v_e_f":["delta","val","easing","func"], # although the "delta" key is "time", it must stay as "delta" as the argument of the "key_add" function
+    "time_value_func_args":["delta","val","fn","args"], 
     "separators":{"defobj":"#", "obj":":", "ns":"/"},
-    "key_components_order":["delta","val","func","func"],
     "textures":[],
     "sprite_names":[],
     "sprites":[],
+    "node_data_attrs":[],
+    "node_data_stacks":{},
     "nodes":[],
-    "objects":{}, #(if nodeindex #0 has multiple objects) -> 0.8, 0.9, 0.10, 0.11 
+    "objects":{},
     "animations":[],
     
 }
@@ -114,9 +115,6 @@ def __pka__(attr):
 class InitCreationRegion:
     def __enter__(self):
         __pvm__("off")
-        for c in project["d_v_e_f"]:
-            if not project["key_components_order"].__contains__(c):
-                raise ProjectError(f"(Internal) : There is no \"{c}\" Key Component") 
         misc["projectmode"] = "init"
         sep = project["separators"]["defobj"]
         project["objects"][sep] = []
@@ -187,7 +185,7 @@ class NodeStack(_NodeIndex):
         __pvm__("init")
         if len(misc["nodestack"]) > 0:
             if not misc["nodestack"][-1] < self:
-                raise ProjectError(f"(NodeStacks) : Node(#{self}) of Erred NodeStack must be created AFTER Node(#{misc["nodestack"][-1]}) of Current NodeStack")
+                raise ProjectError(f"(NodeStacks) : Node(#{self}) of Erred NodeStack must be created AFTER Node(#{misc['nodestack'][-1]}) of Current NodeStack")
         misc["nodestack"].append(self)
         if misc["unusednodes"].__contains__(self):
             misc["unusednodes"].remove(self)
@@ -207,7 +205,7 @@ class NodeStack(_NodeIndex):
 class NodeStackObject(NodeStack):
     def __init__(self,nodeindex:_NodeIndex):
         count = misc["nodeobjectcount"].setdefault(self,0)
-        self.__objname__ = project["separators"]["defobj"]+(f"{self}{project["separators"]["obj"]}{count}" if count>0 else f"{self}")
+        self.__objname__ = project["separators"]["defobj"]+(f"{self}{project['separators']['obj']}{count}" if count>0 else f"{self}")
         misc["nodeobjectcount"][self]+=1
         project["objects"][self.__objname__] = []
 
@@ -323,23 +321,23 @@ class _AnimationIndex(int):
         __pvm__("anim","anim(write)")
         # no __pka__
         key = []
-        order = project["key_components_order"]
-        indextime = order.index(project["d_v_e_f"][0])
-        for c in order:
-            if not comps.__contains__(c):
-                raise ProjectError(f"(Animation) : Key doesn't contain \"{c}\" component")
-            key.append(comps[c])
-        timeset = max(key[indextime],0)
+        deford = project["time_value_func_args"]
+        key.append(comps.setdefault(deford[0],0))
+        key.append(comps.setdefault(deford[1],None))
+        key.append(comps.setdefault(deford[2],0))
+        key.append(comps.setdefault(deford[3],1))
+
+        timeset = max(key[0],0)
         trk = project["animations"][self]["attrs"].setdefault(attr,[])
 
         if len(trk) > 0:
-            addedtime = trk[-1][indextime]
+            addedtime = trk[-1][0]
             timeset += addedtime
             if timeset == addedtime: trk.pop()
         elif not init:
             raise ProjectError(f"(Animation) : Attribute \"{attr}\" was not initiated in this Animation")
-         
-        key[indextime] = timeset
+        key[0] = timeset
+
         trk.append(tuple(key))
         return trk[-1]
         
@@ -371,7 +369,8 @@ def animation_create(**initattrs):
 
     for attr,val in initattrs.items():
         if attr[0] != "_": __pka__(attr)
-        animindex.__addkey__(True,attr,val=val,delta=0,easing=1,func=0)
+        tvfa = project["time_value_func_args"]
+        animindex.__addkey__(True,attr,**{tvfa[0]:0,tvfa[1]:val})
 
     return animindex
 
@@ -384,14 +383,7 @@ def animation_key_add(attr,**comps):
     if not project["animations"][anim]["attrs"].__contains__(attr):
         raise ProjectError(f"(Animation) : Must intialize Attribute \"{attr}\"")
 
-    order = project["d_v_e_f"]
-    comps.setdefault(order[0],0)
-    comps.setdefault(order[1],None)
-    comps.setdefault(order[2],1)
-    comps.setdefault(order[3],0)
-    return anim.__addkey__(
-        False,attr,**comps
-    )[project["key_components_order"].index(project["d_v_e_f"][0])]
+    return anim.__addkey__(False,attr,**comps)[0]
 
 
 ##########################
@@ -404,10 +396,14 @@ def sample_create():
     pass
 
 #-----------------------------------------------------------
-def done(mrasbasename:str=""):
-    with open((mrasbasename if mrasbasename!="" else OS.path.splitext(__file__)[0])+".mras","w") as f: 
-        f.write(JSON.encoder.JSONEncoder().encode(project))
-        
+def done(basename:str=""):
+    filecontents = "{\n"
+    keys = list(project.keys())
+    for key in keys:
+        filecontents += f"  \"{key}\": {JSON.dumps(project[key])}{'' if keys[-1]==key else ','}\n"
+    filecontents += "}"
+
+    open((basename if basename!="" else OS.path.splitext(__file__)[0])+".eRAS","w").write(filecontents)
     print(project)
     misc["projectmode"] = "done"
 
@@ -424,16 +420,32 @@ with InitCreationRegion():
 
 with AnimationCreationRegion():
     with AnimationWrite(animation_create(x=None,y=None,_a=2)) as b:
-        animation_key_add(attr="_a",delta=3)
+        animation_key_add("_a",delta=3)
 
 
 # Create a sample using one object
+# one track to one node (within object)
+# underscored attribute tracks can be added or multiplied to multiple known_attributes
+
+
+# After SampleCreationRegion
+#One sample can be a child of another sample
+# make project[node_list] that would have all the nodes taking an index from project[nodes]  
+# create __gnv__ -> Get Node Variable
+# do not allow the same node to be stacked twice
+# create node_tags dict
+
+
+# no reason to have object stack array
+# no reason to have objects like "0:2"
+# no reason to have project[node][index][ns] as an array
+
+# samplenodeindices
+
 with SampleCreationRegion():
     pass
 
 print(project)
-
-
 
 '''
 
