@@ -8,28 +8,26 @@ import json as JSON
 
 project = {
     "known_attributes":[["x","y","z","xrot","yrot","zrot","xsc","ysc","zsc"],["spr","ind","col","a"]],
-    "time_value_func_args":["delta","val","fn","args"], 
     "separators":{"defobj":"#", "obj":":", "ns":"/"},
     "textures":[],
     "sprite_names":[],
     "sprites":[],
-    "node_data_attrs":[],
-    "node_data_stacks":{},
     "nodes":[],
-    "objects":{},
+    "node_init_data":[],
+    "node_draw":{},
+    "objects":[],
     "animations":[],
     
 }
 misc = {
+    "time_value_func_args":(), 
     "projectmode":"off",
     "nodestack":[],
-    "objectstack":[],
-    "objectaddstack":"",
-    "nodeobjectcount":{},
+    "lastobjlastnode":-1,
     "unusednodes":[], # Nodes that don't draw and don't stack
+    "unusednodedata":[],
     "animcurrent":-1,
 }
-
 
 ## MATRIX MULTIPLICATION matr1@matr2: Child @ Parent
 ## ORDER OF MATRIX MULTIPLICATION: ROTATION -> SCALING -> POSITION
@@ -111,14 +109,19 @@ def __pka__(attr):
     if not (project["known_attributes"][0].__contains__(attr) or project["known_attributes"][1].__contains__(attr)):
         raise ProjectError(f"\"{attr}\" : Unrecognized Attribute (Not in Lists {project['known_attributes']})")
 
+def __pie__(index,_list,name):
+    '''project_index_exists'''
+    if not (-1 < index < len(_list) > 0):
+        raise ProjectError(f"({name}Index) : {name} Index #{index} doesn't exist")
+    
+def project_set_key_component_names(time:str,value:str,function:str,arguments:str):
+    misc["time_value_func_args"] = (time,value,function,arguments)
     
 class InitCreationRegion:
     def __enter__(self):
         __pvm__("off")
+        project_set_key_component_names("delta","val","fn","args")
         misc["projectmode"] = "init"
-        sep = project["separators"]["defobj"]
-        project["objects"][sep] = []
-        misc["objectstack"].append(sep)
 
     def __exit__(self,exc_type,exc_val,exc_tb):
         misc["projectmode"] = "init(done)"
@@ -168,30 +171,47 @@ def sprite_get_from_gamemaker(yyfile:str):
         "origin":(data["sequence"]["xorigin"],data["sequence"]["yorigin"]),
         "size":(data["width"],data["height"])
     }
-    
 
 ##########################################################
 
+
+class _NodeDataIndex(int):
+    def __init__(self,index):
+        __pie__(self,project["node_init_data"],"NodeData")
+
 class _NodeIndex(int):
-    pass
+    def __init__(self,index):
+        __pie__(self,project["nodes"],"Node")
+
 
 ## nodestack array is backwards (when it comes to matrix mult order) -> [..., grandparent, parent, child]
 ## because of nodestack - a child of a node will always have an index greater than the parent - ()
+
+class StartObject:
+    def __enter__(self):
+        __pvm__("init")
+        misc["projectmode"] = "init(obj)"
+        project["objects"].append([])
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        misc["projectmode"] = "init"
+        misc["lastobjlastnode"] = project["objects"][-1][-1]
+
 class NodeStack(_NodeIndex):
     def __init__(self,nodeindex:_NodeIndex):
-        pass
+        _NodeIndex(self) # __pie__
 
     def __stackin__(self):
-        __pvm__("init")
+        __pvm__("init(obj)")
+        if misc["lastobjlastnode"] >= self:
+            raise ProjectError(f"(NodeStacks) : Cannot add (Node #{self}) to this Object when it originates from a different Object")
         if len(misc["nodestack"]) > 0:
-            if not misc["nodestack"][-1] < self:
-                raise ProjectError(f"(NodeStacks) : Node(#{self}) of Erred NodeStack must be created AFTER Node(#{misc['nodestack'][-1]}) of Current NodeStack")
+            if (currnode := misc["nodestack"][-1]) >= self:
+                raise ProjectError(f"(NodeStacks) : No directional dependency -> Invalid (Current Node #{currnode} < New Node #{self})")
         misc["nodestack"].append(self)
         if misc["unusednodes"].__contains__(self):
             misc["unusednodes"].remove(self)
-    
+
     def __stackout__(self):
-        __pvm__("init")
         misc["nodestack"].pop()
 
     def __enter__(self):
@@ -201,46 +221,11 @@ class NodeStack(_NodeIndex):
     def __exit__(self,exc_type,exc_val,exc_tb):
         self.__stackout__()
 
-
-class NodeStackObject(NodeStack):
-    def __init__(self,nodeindex:_NodeIndex):
-        count = misc["nodeobjectcount"].setdefault(self,0)
-        self.__objname__ = project["separators"]["defobj"]+(f"{self}{project['separators']['obj']}{count}" if count>0 else f"{self}")
-        misc["nodeobjectcount"][self]+=1
-        project["objects"][self.__objname__] = []
-
-    def __enter__(self):
-        self.__stackin__()
-        misc["objectstack"].append(self.__objname__)
-        return self
-
-    def __exit__(self,exc_type,exc_val,exc_tb):
-        self.__stackout__()
-        misc["objectstack"].pop()
-
-    def change_name(self,name:str):
-        __pvm__("init")
-        orgname = self.__objname__
-        if orgname != name:
-            if name == "":
-                raise ProjectError("(Objects) : Object name cannot be blank")
-            if name.startswith(project["separators"]["defobj"]):
-                raise ProjectError(f"(Objects) : Object name cannot start with \"{project['separators']['defobj']}\"")
-            if project["objects"].__contains__(name):
-                raise ProjectError(f"(Objects) : Object name \"{name}\" already taken")
-            project["objects"][name] = project["objects"].pop(self.__objname__)
-            if misc["objectstack"].__contains__(orgname):
-                ind = misc["objectstack"].index(orgname)
-                misc["objectstack"].pop(ind)
-                misc["objectstack"].insert(ind,name)
-            self.__objname__ = name
-        return self
-
-
-def node_create(**attrs):
-    __pvm__("init")
+#
+def node_init_data(**attrs):
+    __pvm__("init","init(obj)")
     
-    node = {}
+    nodedata = {}
     matb = [0,0,0,0,0,0,1,1,1]
     mch = False
 
@@ -250,39 +235,40 @@ def node_create(**attrs):
             matb[project["known_attributes"][0].index(attr)] = val
             mch = True
         elif project["known_attributes"][1].__contains__(attr):
-            node[attr] = val
+            nodedata[attr] = val
     if mch:
-        node["matb"] = tuple(matb)
-    project["nodes"].append(node)
+        nodedata["matb"] = tuple(matb)
+    project["node_init_data"].append(nodedata)
+    nodedataindex = _NodeDataIndex(len(project["node_init_data"])-1)
+    misc["unusednodedata"].append(nodedataindex)
+
+    return nodedataindex
+
+#
+def node_create(nodedataindex:_NodeDataIndex=None,draw=False):
+    __pvm__("init(obj)")
+    if misc["unusednodedata"].__contains__(nodedataindex):
+        misc["unusednodedata"].remove(nodedataindex)
+    project["nodes"].append(nodedataindex)
     nodeindex = _NodeIndex(len(project["nodes"])-1)
-    misc["unusednodes"].append(nodeindex)
-    
-    return nodeindex
-
-def node_object_draw(nodeindex:_NodeIndex):
-    __pvm__("init")
-    obj = project["objects"][misc["objectstack"][-1]]
-    if obj.__contains__(nodeindex):
-        raise ProjectError(f"(Objects) : Node(#{nodeindex}) already has been drawn in this Object")
-    obj.append(nodeindex)
-    if misc["unusednodes"].__contains__(nodeindex):
-        misc["unusednodes"].remove(nodeindex)
-    node = project["nodes"][nodeindex]
-    if len(misc["nodestack"]) > 0:
-        sep = project["separators"]["ns"]
-        node.setdefault("ns",[]).append("".join(str(ni)+sep for ni in misc["nodestack"]).strip(sep))
+    project["objects"][-1].append(nodeindex)
+    if draw:
+        nstr = "".join(project["separators"]["ns"]+str(ni) for ni in misc["nodestack"])
+        project["node_draw"].setdefault(nodeindex,nstr)
+    else:
+        misc["unusednodes"].append(nodeindex)
 
     return nodeindex
 
+#############
 def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
-    __pvm__("init")
-
-    with NodeStackObject(node_create()) as pos:
-        with NodeStack(node_create(x=-origin[0],y=-origin[1])) as org:
-            sprinds = project["sprites"][project["sprite_names"].index(spritename)]
-            inds = []
-            for i in sprinds:
-                inds.append(node_object_draw(node_create(spr=spritename,ind=i)))
+    with StartObject():
+        with NodeStack(node_create()) as pos:
+            with NodeStack(node_create(node_init_data(x=-origin[0],y=-origin[1]))) as org:
+                sprinds = project["sprites"][project["sprite_names"].index(spritename)]
+                inds = []
+                for i in sprinds:
+                    inds.append(node_create(node_init_data(spr=spritename,ind=i),True))
                      
     return {
         "main":pos,
@@ -297,31 +283,18 @@ def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
 
 # ------------------------------------------------------------------------------------------ note! Attr mul must be added to the parent 
 
-# (BEFORE AnimCreationRegion)
-# Object node inds - Create instances (clones) of each object node ind 
-# create an object FUNCTION (not CLASS) (node indices inside the function will be drawn)
-# the object would return an index of the project object list, 
-    # (an index as a list which includes the original drawn indices and their NS parent indices as well)
-
-# (IN AnimCreationRegion)
-# with animwrite(anim_create()) (new projectmode)
-# with a(anim_key_index_create(x=3,y=5)) as n -> (creating as optional) Key Index (new projectmode)
-# use underscore attr (eg. _x) as increment - and maybe (_x_) as multiplication
-
-# (AFTER AnimCreationRegion)
-# Assign Animation to an object instance by:
-    # Assign Animation Key Indices to Object Node Indices 
-    # multiple Object Node Inds can use one Anim Key Index
-
-# NO ANIMATION KEY INDICES - JUST ANIMATION INDICES
-# AN ANIMATION CONTROLS ONLY ONE NODE ()
-# Value (Null or Undefined) = Initial Node Value
 class _AnimationIndex(int):
+    def __init__(self,index):
+        __pie__(self,project["animations"],"Animation")
+        
     def __addkey__(self,init,attr:str,**comps):
         __pvm__("anim","anim(write)")
         # no __pka__
         key = []
-        deford = project["time_value_func_args"]
+        deford = misc["time_value_func_args"]
+        for c in comps:
+            if not deford.__contains__(c):
+                raise ProjectError(f"(Animation) : Key Component \"{c}\" invalid")
         key.append(comps.setdefault(deford[0],0))
         key.append(comps.setdefault(deford[1],None))
         key.append(comps.setdefault(deford[2],0))
@@ -344,7 +317,7 @@ class _AnimationIndex(int):
 
 class AnimationWrite(_AnimationIndex):
     def __init__(self,animationindex:_AnimationIndex):
-        pass
+        _AnimationIndex(self) # __pie__
 
     def __enter__(self):
         __pvm__("anim")
@@ -358,9 +331,6 @@ class AnimationWrite(_AnimationIndex):
         misc["projectmode"] = "anim"
 
 
-## KEYS REPLACE INIT VALUES
-## can make independent animations that take attr mul
-# keys time must start at zero
 def animation_create(**initattrs):
     __pvm__("anim")
     anim = {"attrs":{}}
@@ -369,7 +339,7 @@ def animation_create(**initattrs):
 
     for attr,val in initattrs.items():
         if attr[0] != "_": __pka__(attr)
-        tvfa = project["time_value_func_args"]
+        tvfa = misc["time_value_func_args"]
         animindex.__addkey__(True,attr,**{tvfa[0]:0,tvfa[1]:val})
 
     return animindex
@@ -412,15 +382,16 @@ def done(basename:str=""):
 ###################################################
 # C:/Users/mikey/Documents/GameMakerStudio2/RomitronAnimation/sprites/Sprite6/Sprite6.yy
 #
+
 with InitCreationRegion():
     sprite_get_from_gamemaker("sTextBox.yy")
     a = nodes_create_with_sprite_basic("sTextBox",(32,32))
     print(f"Unused Nodes (list of NodeIndices): {misc['unusednodes']}")
 
-
 with AnimationCreationRegion():
     with AnimationWrite(animation_create(x=None,y=None,_a=2)) as b:
         animation_key_add("_a",delta=3)
+
 
 
 # Create a sample using one object
@@ -435,11 +406,6 @@ with AnimationCreationRegion():
 # do not allow the same node to be stacked twice
 # create node_tags dict
 
-
-# no reason to have object stack array
-# no reason to have objects like "0:2"
-# no reason to have project[node][index][ns] as an array
-
 # samplenodeindices
 
 with SampleCreationRegion():
@@ -447,11 +413,10 @@ with SampleCreationRegion():
 
 print(project)
 
+
+
+
 '''
-
-
-
-
 with AnimationCreationRegion():
     anim_create(True)
     anim_enable_draw(*a["inds"])
