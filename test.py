@@ -8,13 +8,13 @@ import json as JSON
 
 project = {
     "known_attributes":[["x","y","z","xrot","yrot","zrot","xsc","ysc","zsc"],["spr","ind","col","a"]],
-    "separators":{"defobj":"#", "obj":":", "ns":"/"},
+    "separators":{"ns":"/"},
     "textures":[],
     "sprite_names":[],
     "sprites":[],
     "nodes":[],
-    "node_init_data":[],
-    "node_draw":{},
+    "node_data":[],
+    "node_stack":[],
     "objects":[],
     "animations":[],
     
@@ -22,7 +22,8 @@ project = {
 misc = {
     "time_value_func_args":(), 
     "projectmode":"off",
-    "nodestack":[],
+    "nodestacktop":-1,
+    "nodeinitdatastring":[],
     "lastobjlastnode":-1,
     "unusednodes":[], # Nodes that don't draw and don't stack
     "unusednodedata":[],
@@ -177,7 +178,7 @@ def sprite_get_from_gamemaker(yyfile:str):
 
 class _NodeDataIndex(int):
     def __init__(self,index):
-        __pie__(self,project["node_init_data"],"NodeData")
+        __pie__(self,project["node_data"],"NodeData")
 
 class _NodeIndex(int):
     def __init__(self,index):
@@ -191,10 +192,9 @@ class StartObject:
     def __enter__(self):
         __pvm__("init")
         misc["projectmode"] = "init(obj)"
-        project["objects"].append([])
     def __exit__(self,exc_type,exc_val,exc_tb):
         misc["projectmode"] = "init"
-        misc["lastobjlastnode"] = project["objects"][-1][-1]
+        project["objects"].append(len(project["nodes"])-1)
 
 class NodeStack(_NodeIndex):
     def __init__(self,nodeindex:_NodeIndex):
@@ -202,17 +202,17 @@ class NodeStack(_NodeIndex):
 
     def __stackin__(self):
         __pvm__("init(obj)")
-        if misc["lastobjlastnode"] >= self:
-            raise ProjectError(f"(NodeStacks) : Cannot add (Node #{self}) to this Object when it originates from a different Object")
-        if len(misc["nodestack"]) > 0:
-            if (currnode := misc["nodestack"][-1]) >= self:
+        if len(project["objects"]) > 0:
+            if project["objects"][-1] >= self:
+                raise ProjectError(f"(NodeStacks) : Cannot add (Node #{self}) to this Object when it originates from a different Object")
+            if (currnode := misc["nodestacktop"]) >= self:
                 raise ProjectError(f"(NodeStacks) : No directional dependency -> Invalid (Current Node #{currnode} < New Node #{self})")
-        misc["nodestack"].append(self)
+        misc["nodestacktop"] = self
         if misc["unusednodes"].__contains__(self):
             misc["unusednodes"].remove(self)
 
     def __stackout__(self):
-        misc["nodestack"].pop()
+        misc["nodestacktop"] = project["node_stack"][misc["nodestacktop"]]
 
     def __enter__(self):
         self.__stackin__()
@@ -222,7 +222,7 @@ class NodeStack(_NodeIndex):
         self.__stackout__()
 
 #
-def node_init_data(**attrs):
+def node_data(**attrs):
     __pvm__("init","init(obj)")
     
     nodedata = {}
@@ -238,25 +238,29 @@ def node_init_data(**attrs):
             nodedata[attr] = val
     if mch:
         nodedata["matb"] = tuple(matb)
-    project["node_init_data"].append(nodedata)
-    nodedataindex = _NodeDataIndex(len(project["node_init_data"])-1)
-    misc["unusednodedata"].append(nodedataindex)
+
+    ndstr = JSON.dumps(nodedata,sort_keys=True)
+    if misc["nodeinitdatastring"].__contains__(ndstr):
+        nodedataindex = misc["nodeinitdatastring"].index(ndstr)
+    else:
+        project["node_data"].append(nodedata)
+        misc["nodeinitdatastring"].append(ndstr)
+        nodedataindex = _NodeDataIndex(len(project["node_data"])-1)
+        misc["unusednodedata"].append(nodedataindex)
 
     return nodedataindex
 
 #
-def node_create(nodedataindex:_NodeDataIndex=None,draw=False):
+def node_create(nodedataindex:_NodeDataIndex=-1):
     __pvm__("init(obj)")
-    if misc["unusednodedata"].__contains__(nodedataindex):
-        misc["unusednodedata"].remove(nodedataindex)
+    if nodedataindex != -1:
+        _NodeDataIndex(nodedataindex) # __pie__
+        if misc["unusednodedata"].__contains__(nodedataindex):
+            misc["unusednodedata"].remove(nodedataindex)
+    project["node_stack"].append(misc["nodestacktop"])
     project["nodes"].append(nodedataindex)
     nodeindex = _NodeIndex(len(project["nodes"])-1)
-    project["objects"][-1].append(nodeindex)
-    if draw:
-        nstr = "".join(project["separators"]["ns"]+str(ni) for ni in misc["nodestack"])
-        project["node_draw"].setdefault(nodeindex,nstr)
-    else:
-        misc["unusednodes"].append(nodeindex)
+    
 
     return nodeindex
 
@@ -264,11 +268,11 @@ def node_create(nodedataindex:_NodeDataIndex=None,draw=False):
 def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
     with StartObject():
         with NodeStack(node_create()) as pos:
-            with NodeStack(node_create(node_init_data(x=-origin[0],y=-origin[1]))) as org:
+            with NodeStack(node_create(node_data(x=-origin[0],y=-origin[1]))) as org:
                 sprinds = project["sprites"][project["sprite_names"].index(spritename)]
                 inds = []
-                for i in sprinds:
-                    inds.append(node_create(node_init_data(spr=spritename,ind=i),True))
+                for i in range(10):
+                    inds.append(node_create(node_data(spr=spritename,ind=i)))
                      
     return {
         "main":pos,
@@ -361,20 +365,19 @@ def animation_key_add(attr,**comps):
 # 
 
 #-----------------------------------------------------------
-
+print("*1,*2,*3(*4,*5(*6)),*7".find("(",0,15))
 def sample_create():
     pass
 
 #-----------------------------------------------------------
-def done(basename:str=""):
+def project_done(basename:str=""):
     filecontents = "{\n"
     keys = list(project.keys())
     for key in keys:
         filecontents += f"  \"{key}\": {JSON.dumps(project[key])}{'' if keys[-1]==key else ','}\n"
     filecontents += "}"
 
-    open((basename if basename!="" else OS.path.splitext(__file__)[0])+".eRAS","w").write(filecontents)
-    print(project)
+    open((basename if basename!="" else OS.path.splitext(__file__)[0])+".rasdat","w").write(filecontents)
     misc["projectmode"] = "done"
 
 
@@ -393,7 +396,7 @@ with AnimationCreationRegion():
         animation_key_add("_a",delta=3)
 
 
-
+project_done()
 # Create a sample using one object
 # one track to one node (within object)
 # underscored attribute tracks can be added or multiplied to multiple known_attributes
@@ -411,8 +414,7 @@ with AnimationCreationRegion():
 with SampleCreationRegion():
     pass
 
-print(project)
-
+#print(project)
 
 
 

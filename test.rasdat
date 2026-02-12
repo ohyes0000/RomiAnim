@@ -1,0 +1,12 @@
+{
+  "known_attributes": [["x", "y", "z", "xrot", "yrot", "zrot", "xsc", "ysc", "zsc"], ["spr", "ind", "col", "a"]],
+  "separators": {"ns": "/"},
+  "textures": ["/fa10c128-d548-4804-a6f2-b99ee83d282d.png"],
+  "sprite_names": ["sTextBox"],
+  "sprites": [[0]],
+  "nodes": [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "node_data": [{"matb": [-32, -32, 0, 0, 0, 0, 1, 1, 1]}, {"spr": "sTextBox", "ind": 0}, {"spr": "sTextBox", "ind": 1}, {"spr": "sTextBox", "ind": 2}, {"spr": "sTextBox", "ind": 3}, {"spr": "sTextBox", "ind": 4}, {"spr": "sTextBox", "ind": 5}, {"spr": "sTextBox", "ind": 6}, {"spr": "sTextBox", "ind": 7}, {"spr": "sTextBox", "ind": 8}, {"spr": "sTextBox", "ind": 9}],
+  "node_stack": [-1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  "objects": [11],
+  "animations": [{"attrs": {"x": [[0, null, 0, 1]], "y": [[0, null, 0, 1]], "_a": [[0, 2, 0, 1], [3, null, 0, 1]]}}]
+}
