@@ -17,8 +17,9 @@ project = {
     "node_stack":[],
     "objects":[],
     "animations":[],
-    
+    "samples":[] # [{objindex:{nodeindex:animindex, ...}, }]
 }
+
 misc = {
     "time_value_func_args":(), 
     "projectmode":"off",
@@ -118,30 +119,6 @@ def __pie__(index,_list,name):
 def project_set_key_component_names(time:str,value:str,function:str,arguments:str):
     misc["time_value_func_args"] = (time,value,function,arguments)
     
-class InitCreationRegion:
-    def __enter__(self):
-        __pvm__("off")
-        project_set_key_component_names("delta","val","fn","args")
-        misc["projectmode"] = "init"
-
-    def __exit__(self,exc_type,exc_val,exc_tb):
-        misc["projectmode"] = "init(done)"
-
-class AnimationCreationRegion:
-    def __enter__(self):
-        __pvm__("init(done)")
-        misc["projectmode"] = "anim"
-
-    def __exit__(self,exc_type,exc_val,exc_tb):
-        misc["projectmode"] = "anim(done)"
-
-class SampleCreationRegion:
-    def __enter__(self):
-        __pvm__("anim(done)")
-        misc["projectmode"] = "smpl"
-
-    def __exit__(self,exc_type,exc_val,exc_tb):
-        misc["projectmode"] = "smpl(done)"  
 
 ####################################################
 
@@ -175,6 +152,14 @@ def sprite_get_from_gamemaker(yyfile:str):
 
 ##########################################################
 
+class InitCreationRegion:
+    def __enter__(self):
+        __pvm__("off")
+        project_set_key_component_names("delta","val","fn","args")
+        misc["projectmode"] = "init"
+
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        misc["projectmode"] = "init(done)"
 
 class _NodeDataIndex(int):
     def __init__(self,index):
@@ -183,6 +168,7 @@ class _NodeDataIndex(int):
 class _NodeIndex(int):
     def __init__(self,index):
         __pie__(self,project["nodes"],"Node")
+
 
 
 ## nodestack array is backwards (when it comes to matrix mult order) -> [..., grandparent, parent, child]
@@ -220,6 +206,7 @@ class NodeStack(_NodeIndex):
     
     def __exit__(self,exc_type,exc_val,exc_tb):
         self.__stackout__()
+
 
 #
 def node_data(**attrs):
@@ -269,7 +256,6 @@ def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
     with StartObject():
         with NodeStack(node_create()) as pos:
             with NodeStack(node_create(node_data(x=-origin[0],y=-origin[1]))) as org:
-                sprinds = project["sprites"][project["sprite_names"].index(spritename)]
                 inds = []
                 for i in range(10):
                     inds.append(node_create(node_data(spr=spritename,ind=i)))
@@ -286,6 +272,15 @@ def nodes_create_with_sprite_basic(spritename:str,origin:tuple):
 ############################################################################
 
 # ------------------------------------------------------------------------------------------ note! Attr mul must be added to the parent 
+
+class AnimationCreationRegion:
+    def __enter__(self):
+        __pvm__("init(done)")
+        misc["projectmode"] = "anim"
+
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        misc["projectmode"] = "anim(done)"
+
 
 class _AnimationIndex(int):
     def __init__(self,index):
@@ -364,10 +359,30 @@ def animation_key_add(attr,**comps):
 # obj: list(inds from nodes_create_with_sprite_basic)
 # 
 
-#-----------------------------------------------------------
-print("*1,*2,*3(*4,*5(*6)),*7".find("(",0,15))
+#-----------------------------------------------------------------------------------------------------------------------
+#[{objindex:{nodeindex:animindex, ...}, }]
+
+
+'''
+
+with smplmake(sample_create(obj)):
+    with smplnode(nodeanimate(animindex)) as b:
+        attrmod
+
+'''
+class SampleCreationRegion:
+    def __enter__(self):
+        __pvm__("anim(done)")
+        misc["projectmode"] = "smpl"
+
+    def __exit__(self,exc_type,exc_val,exc_tb):
+        misc["projectmode"] = "smpl(done)"  
+
+
 def sample_create():
     pass
+
+# 
 
 #-----------------------------------------------------------
 def project_done(basename:str=""):
@@ -396,14 +411,13 @@ with AnimationCreationRegion():
         animation_key_add("_a",delta=3)
 
 
-project_done()
+#project_done()
 # Create a sample using one object
 # one track to one node (within object)
 # underscored attribute tracks can be added or multiplied to multiple known_attributes
 
 
 # After SampleCreationRegion
-#One sample can be a child of another sample
 # make project[node_list] that would have all the nodes taking an index from project[nodes]  
 # create __gnv__ -> Get Node Variable
 # do not allow the same node to be stacked twice
@@ -414,7 +428,7 @@ project_done()
 with SampleCreationRegion():
     pass
 
-#print(project)
+print(project)
 
 
 
